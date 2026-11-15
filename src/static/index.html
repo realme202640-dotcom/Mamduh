@@ -1,52 +1,19 @@
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Mirsal Messenger</title>
-    <link rel="stylesheet" href="/static/styles.css" />
-  </head>
-  <body>
-    <div class="app-shell">
-      <aside class="sidebar">
-        <div class="sidebar-header">
-          <div class="profile-wrap"><div class="avatar">م</div><div><h3>مرسال</h3><span id="profile-phone">غير مسجل</span></div></div>
-          <div class="actions"><button class="icon-btn" id="new-chat" title="محادثة جديدة">＋</button><button class="icon-btn" id="logout" title="تسجيل الخروج">↪</button></div>
-        </div>
-        <div class="search-box"><input id="chat-search" type="search" placeholder="ابحث في المحادثات أو ابدأ محادثة جديدة" /></div>
-        <div class="chat-list" id="chat-list"></div>
-      </aside>
-      <main class="main-panel">
-        <section class="auth-view" id="auth-view">
-          <div class="auth-card">
-            <div class="brand"><div class="brand-icon">M</div><h1>مرسال</h1></div>
-            <h2>تسجيل رقم الهاتف</h2><p>سنرسل رمز تحقق برسالة نصية إلى هاتفك.</p>
-            <div class="field-row"><select id="country-code" aria-label="مفتاح الدولة"><option value="+966">السعودية +966</option><option value="+971">الإمارات +971</option><option value="+965">الكويت +965</option><option value="+20">مصر +20</option><option value="+1">أمريكا +1</option></select><input id="phone-input" type="tel" autocomplete="tel-national" placeholder="رقم الهاتف" /></div>
-            <button id="register-btn" class="primary-btn">إرسال رمز التحقق</button>
-            <div class="otp-box hidden" id="otp-box"><label for="otp-input">رمز التحقق</label><input id="otp-input" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="أدخل الرمز الذي وصلك" /><button id="verify-btn" class="secondary-btn">تأكيد وتسجيل الدخول</button></div>
-            <div id="auth-message" class="message hidden" role="status"></div>
-            <p class="fine-print">يتطلب إرسال الرسائل إعداد مزود SMS مثل Twilio Verify على الخادم.</p>
-          </div>
-        </section>
-        <section class="content-view hidden" id="chat-view">
-          <div class="chat-header"><div class="chat-user"><div class="avatar small" id="chat-avatar">م</div><div><h3 id="chat-title">اختر محادثة</h3><span id="chat-status">رسائل محفوظة في قاعدة البيانات</span></div></div><div class="chat-tools"><button class="icon-btn" id="audio-call" title="مكالمة صوتية">📞</button><button class="icon-btn" id="video-call" title="مكالمة فيديو">📹</button></div></div>
-          <div class="messages" id="messages"><div class="empty-state">اختر محادثة أو ابدأ محادثة جديدة</div></div>
-          <form id="message-form" class="composer"><input id="message-input" maxlength="4000" placeholder="اكتب رسالة..." autocomplete="off" /><button type="submit" class="primary-btn small">إرسال</button></form>
-        </section>
-        <section class="content-view hidden" id="broadcast-view">
-          <div class="panel-header"><h2>البث المباشر</h2><button id="start-live" class="primary-btn small">ابدأ البث</button></div>
-          <div class="live-stream-card"><div class="live-video"><video id="live-preview" autoplay muted playsinline></video><div class="live-pulse"></div><div class="live-overlay"><span id="live-badge">جاهز</span><strong id="live-title">ابدأ بثاً جديداً</strong></div></div><div class="live-meta"><div><label>المشاهدون</label><strong id="viewers-count">0</strong></div><div><label>الحالة</label><strong id="host-name">غير مباشر</strong></div></div></div>
-          <div class="stream-list" id="stream-list"></div>
-        </section>
-        <section class="content-view hidden" id="calls-view">
-          <div class="panel-header"><h2>المكالمات</h2><button id="new-call" class="primary-btn small">اتصال جديد</button></div>
-          <div class="call-stage hidden" id="call-stage"><video id="call-preview" autoplay muted playsinline></video><div class="call-overlay"><div class="call-contact" id="call-contact">اتصال</div><div id="call-state">جارٍ الاتصال</div><div class="call-controls"><button id="mute-call" class="call-control">🎙️<span>كتم</span></button><button id="share-screen" class="call-control">🖥️<span>مشاركة الشاشة</span></button><button id="end-call" class="call-control end">📴<span>إنهاء</span></button></div></div></div>
-          <div class="calls-list" id="calls-list"></div>
-        </section>
-      </main>
-    </div>
-    <nav class="bottom-nav"><button class="nav-btn active" data-view="chat-view" aria-label="المحادثات">💬</button><button class="nav-btn" data-view="broadcast-view" aria-label="البث">📹</button><button class="nav-btn" data-view="calls-view" aria-label="المكالمات">📞</button></nav>
-    <div class="toast hidden" id="toast" role="status"></div>
-    <script src="/static/app.js"></script>
-  </body>
-</html>
+<head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>مرسال</title><link rel="stylesheet" href="/static/styles.css"/></head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="sidebar-header"><button id="open-profile" class="profile-wrap profile-trigger" title="الملف الشخصي"><div class="avatar" id="sidebar-avatar">م</div><div><h3 id="sidebar-name">مرسال</h3><span id="profile-phone">غير مسجل</span></div></button><div class="actions"><button class="icon-btn" id="new-chat" title="محادثة جديدة">＋</button><button class="icon-btn" id="logout" title="تسجيل الخروج">↪</button></div></div>
+    <div class="search-box"><input id="chat-search" type="search" placeholder="ابحث في المحادثات"/></div><div class="chat-list" id="chat-list"></div>
+  </aside>
+  <main class="main-panel">
+    <section class="auth-view" id="auth-view"><div class="auth-card"><div class="brand"><div class="brand-icon">M</div><h1>مرسال</h1></div><h2>تسجيل رقم الهاتف</h2><p>سنرسل رمز تحقق برسالة نصية إلى هاتفك.</p><div class="field-row"><select id="country-code" aria-label="مفتاح الدولة"><option value="+966">السعودية +966</option><option value="+971">الإمارات +971</option><option value="+965">الكويت +965</option><option value="+20">مصر +20</option><option value="+1">أمريكا +1</option></select><input id="phone-input" type="tel" autocomplete="tel-national" placeholder="رقم الهاتف"/></div><button id="register-btn" class="primary-btn">إرسال رمز التحقق</button><div class="otp-box hidden" id="otp-box"><label for="otp-input">رمز التحقق</label><input id="otp-input" inputmode="numeric" autocomplete="one-time-code" maxlength="10"/><button id="verify-btn" class="secondary-btn">تأكيد وتسجيل الدخول</button></div><div id="auth-message" class="message hidden" role="status"></div><p class="fine-print">يتطلب إرسال الرسائل إعداد Twilio Verify.</p></div></section>
+    <section class="content-view hidden" id="chat-view"><div class="chat-header"><div class="chat-user"><div class="avatar small" id="chat-avatar">م</div><div><h3 id="chat-title">اختر محادثة</h3><span id="chat-status">رسائل محفوظة بأمان</span></div></div><div class="chat-tools"><button class="icon-btn" id="audio-call" title="اتصال صوتي">📞</button><button class="icon-btn" id="video-call" title="اتصال فيديو">📹</button></div></div><div class="messages" id="messages"><div class="empty-state">اختر محادثة أو ابدأ واحدة جديدة</div></div><form id="message-form" class="composer"><input id="message-input" maxlength="4000" placeholder="اكتب رسالة..."/><button class="primary-btn small">إرسال</button></form></section>
+    <section class="content-view hidden" id="broadcast-view"><div class="panel-header"><h2>البث المباشر</h2><button id="start-live" class="primary-btn small">ابدأ البث</button></div><div class="live-stream-card"><div class="live-video"><video id="live-preview" autoplay muted playsinline></video><div class="live-pulse"></div><div class="live-overlay"><span id="live-badge">جاهز</span><strong id="live-title">ابدأ بثاً جديداً</strong></div></div><div class="live-meta"><div><label>المشاهدون</label><strong id="viewers-count">0</strong></div><div><label>الحالة</label><strong id="host-name">غير مباشر</strong></div></div></div><div class="stream-list" id="stream-list"></div></section>
+    <section class="content-view hidden" id="calls-view"><div class="panel-header"><h2>المكالمات</h2><button id="new-call" class="primary-btn small">اتصال جديد</button></div><div class="call-stage hidden" id="call-stage"><video id="call-preview" autoplay muted playsinline></video><video id="remote-preview" autoplay playsinline></video><div class="call-overlay"><div><div class="call-contact" id="call-contact">اتصال</div><div id="call-state">جارٍ الاتصال</div></div><div class="call-controls"><button id="mute-call" class="call-control">🎙️<span>كتم</span></button><button id="share-screen" class="call-control">🖥️<span>مشاركة الشاشة</span></button><button id="end-call" class="call-control end">📴<span>إنهاء</span></button></div></div></div><div class="calls-list" id="calls-list"></div></section>
+    <section class="content-view hidden" id="profile-view"><div class="panel-header"><h2>الملف الشخصي</h2><button id="profile-back" class="secondary-btn">رجوع</button></div><form id="profile-form" class="profile-form"><div class="profile-avatar-large" id="profile-avatar-large">م</div><label for="profile-name">الاسم الظاهر</label><input id="profile-name" maxlength="80" required/><label for="profile-about">نبذة</label><textarea id="profile-about" maxlength="240" rows="3" placeholder="اكتب نبذة قصيرة"></textarea><label for="profile-avatar-url">رابط صورة الملف الشخصي (اختياري)</label><input id="profile-avatar-url" type="url" maxlength="1000" placeholder="https://..."/><div class="phone-note" id="profile-phone-note"></div><button class="primary-btn" type="submit">حفظ التغييرات</button></form></section>
+  </main>
+</div>
+<nav class="bottom-nav"><button class="nav-btn active" data-view="chat-view" aria-label="المحادثات">💬</button><button class="nav-btn" data-view="broadcast-view" aria-label="البث">📹</button><button class="nav-btn" data-view="calls-view" aria-label="المكالمات">📞</button></nav><div class="toast hidden" id="toast" role="status"></div><script src="/static/app.js"></script>
+</body></html>

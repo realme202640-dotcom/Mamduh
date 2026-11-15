@@ -1,82 +1,109 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import secrets
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from sqlalchemy import (Column, ForeignKey, Integer, String, Text, UniqueConstraint,
+                        create_engine, or_, select, text)
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = Path(os.getenv("MIRSAL_DB_PATH", str(BASE_DIR.parent / "mirsal.db")))
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR.parent / 'mirsal.db'}")
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
+elif DATABASE_URL.startswith("postgresql://") and "+" not in DATABASE_URL.split(":")[0]:
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
+SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+Base = declarative_base()
 SESSION_DAYS = 30
 
-app = FastAPI(title="Mirsal Messenger", description="Phone-verified messaging demo")
+
+class User(Base):
+    __tablename__ = "users"
+    phone = Column(String(20), primary_key=True)
+    country_code = Column(String(8), nullable=False, default="+966")
+    created_at = Column(String(40), nullable=False)
+    display_name = Column(String(80), nullable=False, default="")
+    about = Column(String(240), nullable=False, default="")
+    avatar_url = Column(Text, nullable=False, default="")
+
+
+class LoginSession(Base):
+    __tablename__ = "sessions"
+    token_hash = Column(String(64), primary_key=True)
+    phone = Column(String(20), ForeignKey("users.phone", ondelete="CASCADE"), nullable=False)
+    expires_at = Column(String(40), nullable=False)
+
+
+class Chat(Base):
+    __tablename__ = "chats"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_phone = Column(String(20), ForeignKey("users.phone", ondelete="CASCADE"), nullable=False)
+    contact_phone = Column(String(20), nullable=False)
+    contact_name = Column(String(80), nullable=False)
+    created_at = Column(String(40), nullable=False)
+    __table_args__ = (UniqueConstraint("owner_phone", "contact_phone", name="uq_chat_owner_contact"),)
+
+
+class Message(Base):
+    __tablename__ = "messages"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chat_id = Column(Integer, ForeignKey("chats.id", ondelete="CASCADE"), nullable=False)
+    sender_phone = Column(String(20), nullable=False)
+    text = Column(Text, nullable=False)
+    created_at = Column(String(40), nullable=False)
+
+
+class Stream(Base):
+    __tablename__ = "streams"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    host_phone = Column(String(20), ForeignKey("users.phone", ondelete="CASCADE"), nullable=False)
+    title = Column(String(120), nullable=False)
+    status = Column(String(20), nullable=False, default="live")
+    viewers = Column(Integer, nullable=False, default=0)
+    created_at = Column(String(40), nullable=False)
+
+
+class Call(Base):
+    __tablename__ = "calls"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_phone = Column(String(20), ForeignKey("users.phone", ondelete="CASCADE"), nullable=False)
+    contact_phone = Column(String(20), nullable=False)
+    status = Column(String(20), nullable=False)
+    created_at = Column(String(40), nullable=False)
+    ended_at = Column(String(40), nullable=True)
+
+
+app = FastAPI(title="Mirsal Messenger", description="Phone-verified messaging app with WebRTC signaling")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 
-def connect() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, timeout=15)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def init_db() -> None:
-    with connect() as db:
-        db.executescript("""
-        CREATE TABLE IF NOT EXISTS users (
-            phone TEXT PRIMARY KEY,
-            country_code TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS sessions (
-            token_hash TEXT PRIMARY KEY,
-            phone TEXT NOT NULL REFERENCES users(phone) ON DELETE CASCADE,
-            expires_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS chats (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            owner_phone TEXT NOT NULL REFERENCES users(phone) ON DELETE CASCADE,
-            contact_phone TEXT NOT NULL,
-            contact_name TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            UNIQUE(owner_phone, contact_phone)
-        );
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-            sender_phone TEXT NOT NULL,
-            text TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS streams (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            host_phone TEXT NOT NULL REFERENCES users(phone) ON DELETE CASCADE,
-            title TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'live',
-            viewers INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS calls (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            owner_phone TEXT NOT NULL REFERENCES users(phone) ON DELETE CASCADE,
-            contact_phone TEXT NOT NULL,
-            status TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            ended_at TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_chats_owner ON chats(owner_phone);
-        CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, id);
-        """)
+    Base.metadata.create_all(engine)
+    # Safe, additive profile migration for existing SQLite installations.
+    if engine.dialect.name == "sqlite":
+        with engine.begin() as conn:
+            existing = {row["name"] for row in conn.execute(text("PRAGMA table_info(users)")).mappings()}
+            for name, declaration in (("display_name", "VARCHAR(80) NOT NULL DEFAULT ''"),
+                                      ("about", "VARCHAR(240) NOT NULL DEFAULT ''"),
+                                      ("avatar_url", "TEXT NOT NULL DEFAULT ''")):
+                if name not in existing:
+                    conn.execute(text(f"ALTER TABLE users ADD COLUMN {name} {declaration}"))
 
 
 @app.on_event("startup")
@@ -84,75 +111,73 @@ def startup() -> None:
     init_db()
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 def normalize_phone(phone: str) -> str:
     value = phone.strip()
-    if value.startswith("+"):
-        digits = "".join(ch for ch in value[1:] if ch.isdigit())
-    else:
-        digits = "".join(ch for ch in value if ch.isdigit())
+    digits = "".join(ch for ch in (value[1:] if value.startswith("+") else value) if ch.isdigit())
     if not 8 <= len(digits) <= 15:
         raise HTTPException(status_code=400, detail="أدخل رقم هاتف صحيحاً مع مفتاح الدولة")
     return "+" + digits
 
 
 def token_hash(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 class RegisterRequest(BaseModel):
     phone: str = Field(min_length=8, max_length=20)
-    country_code: str = Field(default="+966", max_length=5)
-
+    country_code: str = Field(default="+966", max_length=8)
 
 class VerifyRequest(BaseModel):
     phone: str = Field(min_length=8, max_length=20)
     code: str = Field(min_length=4, max_length=10)
 
-
 class MessageRequest(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
-
 
 class NewChatRequest(BaseModel):
     phone: str = Field(min_length=8, max_length=20)
     name: Optional[str] = Field(default=None, max_length=80)
 
-
 class StreamRequest(BaseModel):
     title: str = Field(min_length=1, max_length=120)
-
 
 class CallRequest(BaseModel):
     contact: str = Field(min_length=8, max_length=20)
 
+class ProfileRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=80)
+    about: str = Field(default="", max_length=240)
+    avatar_url: str = Field(default="", max_length=1000)
 
-def current_user(authorization: Optional[str] = Header(default=None)) -> str:
+
+def user_from_token(token: str, db) -> Optional[User]:
+    row = db.execute(select(LoginSession).where(LoginSession.token_hash == token_hash(token))).scalar_one_or_none()
+    if not row or datetime.fromisoformat(row.expires_at) <= datetime.now(timezone.utc):
+        return None
+    return db.get(User, row.phone)
+
+
+def current_user(authorization: Optional[str] = Header(default=None), db=Depends(get_db)) -> str:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="سجّل الدخول للمتابعة")
-    token = authorization.removeprefix("Bearer ").strip()
-    with connect() as db:
-        row = db.execute(
-            "SELECT phone, expires_at FROM sessions WHERE token_hash = ?",
-            (token_hash(token),),
-        ).fetchone()
-    if not row or datetime.fromisoformat(row["expires_at"]) <= datetime.now(timezone.utc):
+    user = user_from_token(authorization.removeprefix("Bearer ").strip(), db)
+    if not user:
         raise HTTPException(status_code=401, detail="انتهت الجلسة، سجّل الدخول مجدداً")
-    return str(row["phone"])
+    return user.phone
 
 
 def require_twilio() -> tuple[str, str, str]:
-    sid = os.getenv("TWILIO_ACCOUNT_SID")
-    auth = os.getenv("TWILIO_AUTH_TOKEN")
-    service = os.getenv("TWILIO_VERIFY_SERVICE_SID")
+    sid, auth, service = (os.getenv(k) for k in ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_VERIFY_SERVICE_SID"))
     if not all((sid, auth, service)):
-        raise HTTPException(
-            status_code=503,
-            detail="تسجيل الهاتف الحقيقي غير مفعّل. اضبط TWILIO_ACCOUNT_SID وTWILIO_AUTH_TOKEN وTWILIO_VERIFY_SERVICE_SID.",
-        )
+        raise HTTPException(status_code=503, detail="التحقق غير مفعّل؛ اضبط إعدادات Twilio Verify على الخادم.")
     return sid or "", auth or "", service or ""
 
 
@@ -160,187 +185,194 @@ def require_twilio() -> tuple[str, str, str]:
 def root():
     return RedirectResponse(url="/static/index.html")
 
-
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "database": "sqlite", "phone_verification": "Twilio Verify"}
-
+    return {"status": "ok", "database": engine.dialect.name, "signaling": "websocket"}
 
 @app.post("/api/register")
-def register_phone(data: RegisterRequest):
+def register_phone(data: RegisterRequest, db=Depends(get_db)):
     phone = normalize_phone(data.phone)
     sid, auth, service = require_twilio()
     try:
-        response = httpx.post(
-            f"https://verify.twilio.com/v2/Services/{service}/Verifications",
-            data={"To": phone, "Channel": "sms"},
-            auth=(sid, auth),
-            timeout=15,
-        )
+        response = httpx.post(f"https://verify.twilio.com/v2/Services/{service}/Verifications",
+                              data={"To": phone, "Channel": "sms"}, auth=(sid, auth), timeout=15)
         response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        detail = "تعذر إرسال رمز التحقق. تحقق من الرقم وإعدادات مزود الرسائل."
-        raise HTTPException(status_code=502, detail=detail) from exc
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail="تعذر الاتصال بخدمة إرسال رمز التحقق") from exc
-
-    with connect() as db:
-        db.execute(
-            "INSERT INTO users(phone, country_code, created_at) VALUES (?, ?, ?) "
-            "ON CONFLICT(phone) DO UPDATE SET country_code = excluded.country_code",
-            (phone, data.country_code, now_iso()),
-        )
+        raise HTTPException(status_code=502, detail="تعذر إرسال رمز التحقق عبر SMS") from exc
+    user = db.get(User, phone)
+    if user:
+        user.country_code = data.country_code
+    else:
+        db.add(User(phone=phone, country_code=data.country_code, created_at=now_iso()))
+    db.commit()
     return {"message": "أرسلنا رمز التحقق عبر رسالة نصية", "phone": phone}
 
-
 @app.post("/api/verify")
-def verify_phone(data: VerifyRequest):
+def verify_phone(data: VerifyRequest, db=Depends(get_db)):
     phone = normalize_phone(data.phone)
     sid, auth, service = require_twilio()
     try:
-        response = httpx.post(
-            f"https://verify.twilio.com/v2/Services/{service}/VerificationChecks",
-            data={"To": phone, "Code": data.code},
-            auth=(sid, auth),
-            timeout=15,
-        )
+        response = httpx.post(f"https://verify.twilio.com/v2/Services/{service}/VerificationChecks",
+                              data={"To": phone, "Code": data.code}, auth=(sid, auth), timeout=15)
         response.raise_for_status()
-        result = response.json()
+        if response.json().get("status") != "approved":
+            raise HTTPException(status_code=400, detail="رمز التحقق غير صحيح أو منتهي الصلاحية")
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=400, detail="رمز التحقق غير صحيح أو منتهي الصلاحية") from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="تعذر التحقق من الرمز حالياً") from exc
-
-    if result.get("status") != "approved":
-        raise HTTPException(status_code=400, detail="رمز التحقق غير صحيح أو منتهي الصلاحية")
-
-    with connect() as db:
-        db.execute(
-            "INSERT INTO users(phone, country_code, created_at) VALUES (?, ?, ?) "
-            "ON CONFLICT(phone) DO NOTHING",
-            (phone, "+" + "".join(ch for ch in data.phone.strip().split()[0] if ch.isdigit())[:3], now_iso()),
-        )
-        token = secrets.token_urlsafe(32)
-        expires = (datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)).isoformat()
-        db.execute("INSERT INTO sessions(token_hash, phone, expires_at) VALUES (?, ?, ?)",
-                   (token_hash(token), phone, expires))
+    user = db.get(User, phone)
+    if not user:
+        user = User(phone=phone, country_code="+966", created_at=now_iso())
+        db.add(user)
+    token = secrets.token_urlsafe(32)
+    db.add(LoginSession(token_hash=token_hash(token), phone=phone,
+                        expires_at=(datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)).isoformat()))
+    db.commit()
     return {"message": "تم التحقق بنجاح", "phone": phone, "access_token": token}
 
-
 @app.get("/api/me")
-def me(phone: str = Depends(current_user)):
-    return {"phone": phone}
+def me(phone: str = Depends(current_user), db=Depends(get_db)):
+    user = db.get(User, phone)
+    return {"phone": phone, "display_name": user.display_name or "", "about": user.about or "", "avatar_url": user.avatar_url or ""}
 
+@app.put("/api/profile")
+def update_profile(data: ProfileRequest, phone: str = Depends(current_user), db=Depends(get_db)):
+    user = db.get(User, phone)
+    user.display_name, user.about, user.avatar_url = data.display_name.strip(), data.about.strip(), data.avatar_url.strip()
+    db.commit()
+    return {"phone": phone, "display_name": user.display_name, "about": user.about, "avatar_url": user.avatar_url}
 
 @app.post("/api/logout")
-def logout(phone: str = Depends(current_user), authorization: Optional[str] = Header(default=None)):
-    token = (authorization or "").removeprefix("Bearer ").strip()
-    with connect() as db:
-        db.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash(token),))
+def logout(authorization: Optional[str] = Header(default=None), db=Depends(get_db)):
+    if authorization and authorization.startswith("Bearer "):
+        row = db.get(LoginSession, token_hash(authorization.removeprefix("Bearer ").strip()))
+        if row:
+            db.delete(row); db.commit()
     return {"message": "تم تسجيل الخروج"}
 
-
 @app.get("/api/chats")
-def get_chats(phone: str = Depends(current_user)):
-    with connect() as db:
-        rows = db.execute("""
-            SELECT c.id, c.contact_phone, c.contact_name,
-                   (SELECT text FROM messages m WHERE m.chat_id = c.id ORDER BY m.id DESC LIMIT 1) AS last_message,
-                   (SELECT created_at FROM messages m WHERE m.chat_id = c.id ORDER BY m.id DESC LIMIT 1) AS last_time
-            FROM chats c WHERE c.owner_phone = ? ORDER BY COALESCE(last_time, c.created_at) DESC
-        """, (phone,)).fetchall()
-    return [{"id": row["id"], "name": row["contact_name"], "phone": row["contact_phone"],
-             "lastMessage": row["last_message"] or "ابدأ المحادثة", "status": "متاح"} for row in rows]
-
+def get_chats(phone: str = Depends(current_user), db=Depends(get_db)):
+    chats = db.execute(select(Chat).where(Chat.owner_phone == phone).order_by(Chat.id.desc())).scalars().all()
+    result = []
+    for chat in chats:
+        last = db.execute(select(Message).where(Message.chat_id == chat.id).order_by(Message.id.desc()).limit(1)).scalar_one_or_none()
+        result.append({"id": chat.id, "name": chat.contact_name, "phone": chat.contact_phone,
+                       "lastMessage": last.text if last else "ابدأ المحادثة", "status": "متاح"})
+    return result
 
 @app.post("/api/chats")
-def create_chat(data: NewChatRequest, phone: str = Depends(current_user)):
-    contact_phone = normalize_phone(data.phone)
-    if contact_phone == phone:
+def create_chat(data: NewChatRequest, phone: str = Depends(current_user), db=Depends(get_db)):
+    contact = normalize_phone(data.phone)
+    if contact == phone:
         raise HTTPException(status_code=400, detail="لا يمكنك بدء محادثة مع رقمك")
-    name = (data.name or contact_phone).strip()
-    with connect() as db:
-        db.execute("INSERT OR IGNORE INTO chats(owner_phone, contact_phone, contact_name, created_at) VALUES (?, ?, ?, ?)",
-                   (phone, contact_phone, name, now_iso()))
-        row = db.execute("SELECT id, contact_phone, contact_name FROM chats WHERE owner_phone = ? AND contact_phone = ?",
-                         (phone, contact_phone)).fetchone()
-    return {"id": row["id"], "phone": row["contact_phone"], "name": row["contact_name"], "lastMessage": "ابدأ المحادثة"}
-
+    chat = db.execute(select(Chat).where(Chat.owner_phone == phone, Chat.contact_phone == contact)).scalar_one_or_none()
+    if not chat:
+        chat = Chat(owner_phone=phone, contact_phone=contact, contact_name=(data.name or contact).strip(), created_at=now_iso())
+        db.add(chat); db.commit(); db.refresh(chat)
+    return {"id": chat.id, "phone": contact, "name": chat.contact_name, "lastMessage": "ابدأ المحادثة"}
 
 @app.get("/api/chats/{chat_id}/messages")
-def get_chat_messages(chat_id: int, phone: str = Depends(current_user)):
-    with connect() as db:
-        chat = db.execute("SELECT id FROM chats WHERE id = ? AND owner_phone = ?", (chat_id, phone)).fetchone()
-        if not chat:
-            raise HTTPException(status_code=404, detail="المحادثة غير موجودة")
-        rows = db.execute("SELECT id, sender_phone, text, created_at FROM messages WHERE chat_id = ? ORDER BY id", (chat_id,)).fetchall()
-    return [{"id": row["id"], "sender": "Me" if row["sender_phone"] == phone else row["sender_phone"],
-             "text": row["text"], "time": row["created_at"][11:16]} for row in rows]
-
+def get_messages(chat_id: int, phone: str = Depends(current_user), db=Depends(get_db)):
+    chat = db.execute(select(Chat).where(Chat.id == chat_id, Chat.owner_phone == phone)).scalar_one_or_none()
+    if not chat: raise HTTPException(status_code=404, detail="المحادثة غير موجودة")
+    messages = db.execute(select(Message).where(Message.chat_id == chat_id).order_by(Message.id)).scalars().all()
+    return [{"id": m.id, "sender": "Me" if m.sender_phone == phone else m.sender_phone, "text": m.text,
+             "time": datetime.fromisoformat(m.created_at).strftime("%H:%M")} for m in messages]
 
 @app.post("/api/chats/{chat_id}/messages")
-def send_message(chat_id: int, data: MessageRequest, phone: str = Depends(current_user)):
-    text = data.text.strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="اكتب رسالة أولاً")
-    with connect() as db:
-        chat = db.execute("SELECT id FROM chats WHERE id = ? AND owner_phone = ?", (chat_id, phone)).fetchone()
-        if not chat:
-            raise HTTPException(status_code=404, detail="المحادثة غير موجودة")
-        cursor = db.execute("INSERT INTO messages(chat_id, sender_phone, text, created_at) VALUES (?, ?, ?, ?)",
-                            (chat_id, phone, text, now_iso()))
-        message_id = cursor.lastrowid
-    return {"id": message_id, "sender": "Me", "text": text, "time": datetime.now().strftime("%H:%M")}
-
+def send_message(chat_id: int, data: MessageRequest, phone: str = Depends(current_user), db=Depends(get_db)):
+    chat = db.execute(select(Chat).where(Chat.id == chat_id, Chat.owner_phone == phone)).scalar_one_or_none()
+    if not chat: raise HTTPException(status_code=404, detail="المحادثة غير موجودة")
+    message = Message(chat_id=chat_id, sender_phone=phone, text=data.text.strip(), created_at=now_iso())
+    db.add(message); db.commit(); db.refresh(message)
+    return {"id": message.id, "sender": "Me", "text": message.text, "time": datetime.now().strftime("%H:%M")}
 
 @app.get("/api/live")
-def get_streams(phone: str = Depends(current_user)):
-    with connect() as db:
-        rows = db.execute("SELECT id, host_phone, title, status, viewers FROM streams ORDER BY id DESC LIMIT 50").fetchall()
-    return [{"id": r["id"], "host": r["host_phone"], "title": r["title"], "status": r["status"], "viewers": r["viewers"]} for r in rows]
-
+def get_streams(phone: str = Depends(current_user), db=Depends(get_db)):
+    rows = db.execute(select(Stream).order_by(Stream.id.desc()).limit(50)).scalars().all()
+    return [{"id": r.id, "host": r.host_phone, "title": r.title, "status": r.status, "viewers": r.viewers} for r in rows]
 
 @app.post("/api/live")
-def create_stream(data: StreamRequest, phone: str = Depends(current_user)):
-    with connect() as db:
-        cursor = db.execute("INSERT INTO streams(host_phone, title, status, viewers, created_at) VALUES (?, ?, 'live', 0, ?)",
-                            (phone, data.title.strip(), now_iso()))
-    return {"id": cursor.lastrowid, "title": data.title.strip(), "host": phone, "viewers": 0, "status": "live"}
+def create_stream(data: StreamRequest, phone: str = Depends(current_user), db=Depends(get_db)):
+    stream = Stream(host_phone=phone, title=data.title.strip(), status="live", viewers=0, created_at=now_iso())
+    db.add(stream); db.commit(); db.refresh(stream)
+    return {"id": stream.id, "title": stream.title, "host": phone, "viewers": 0, "status": "live"}
 
-
-@app.post("/api/live/{stream_id}/toggle")
-def toggle_stream(stream_id: int, phone: str = Depends(current_user)):
-    with connect() as db:
-        row = db.execute("SELECT status FROM streams WHERE id = ? AND host_phone = ?", (stream_id, phone)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="البث غير موجود")
-        status = "offline" if row["status"] == "live" else "live"
-        db.execute("UPDATE streams SET status = ? WHERE id = ?", (status, stream_id))
-    return {"id": stream_id, "status": status}
-
+@app.get("/api/rtc-config")
+def rtc_config(phone: str = Depends(current_user)):
+    ice = [{"urls": ["stun:stun.l.google.com:19302"]}]
+    urls = os.getenv("TURN_URLS", "").split(",")
+    if urls and urls[0].strip():
+        turn = {"urls": [url.strip() for url in urls if url.strip()], "username": os.getenv("TURN_USERNAME", ""), "credential": os.getenv("TURN_CREDENTIAL", "")}
+        ice.append(turn)
+    return {"iceServers": ice}
 
 @app.get("/api/calls")
-def get_calls(phone: str = Depends(current_user)):
-    with connect() as db:
-        rows = db.execute("SELECT id, contact_phone, status, created_at, ended_at FROM calls WHERE owner_phone = ? ORDER BY id DESC LIMIT 50", (phone,)).fetchall()
-    return [{"id": r["id"], "contact": r["contact_phone"], "status": r["status"],
-             "duration": "جارية" if r["status"] == "active" else (r["ended_at"] or r["created_at"])[11:16]} for r in rows]
-
+def get_calls(phone: str = Depends(current_user), db=Depends(get_db)):
+    rows = db.execute(select(Call).where(or_(Call.owner_phone == phone, Call.contact_phone == phone)).order_by(Call.id.desc()).limit(50)).scalars().all()
+    return [{"id": c.id, "contact": c.contact_phone if c.owner_phone == phone else c.owner_phone,
+             "direction": "outgoing" if c.owner_phone == phone else "incoming", "status": c.status,
+             "duration": "جارية" if c.status in ("ringing", "active") else "منتهية"} for c in rows]
 
 @app.post("/api/calls")
-def create_call(data: CallRequest, phone: str = Depends(current_user)):
+def create_call(data: CallRequest, phone: str = Depends(current_user), db=Depends(get_db)):
     contact = normalize_phone(data.contact)
-    with connect() as db:
-        cursor = db.execute("INSERT INTO calls(owner_phone, contact_phone, status, created_at) VALUES (?, ?, 'active', ?)",
-                            (phone, contact, now_iso()))
-    return {"id": cursor.lastrowid, "contact": contact, "status": "active"}
+    if contact == phone: raise HTTPException(status_code=400, detail="لا يمكنك الاتصال برقمك")
+    call = Call(owner_phone=phone, contact_phone=contact, status="ringing", created_at=now_iso())
+    db.add(call); db.commit(); db.refresh(call)
+    return {"id": call.id, "contact": contact, "status": call.status}
 
+@app.post("/api/calls/{call_id}/answer")
+def answer_call(call_id: int, phone: str = Depends(current_user), db=Depends(get_db)):
+    call = db.get(Call, call_id)
+    if not call or phone not in (call.owner_phone, call.contact_phone): raise HTTPException(status_code=404, detail="المكالمة غير موجودة")
+    if phone == call.contact_phone and call.status == "ringing": call.status = "active"; db.commit()
+    return {"id": call.id, "status": call.status}
 
 @app.post("/api/calls/{call_id}/end")
-def end_call(call_id: int, phone: str = Depends(current_user)):
-    with connect() as db:
-        result = db.execute("UPDATE calls SET status = 'ended', ended_at = ? WHERE id = ? AND owner_phone = ? AND status = 'active'",
-                            (now_iso(), call_id, phone))
-        if not result.rowcount:
-            raise HTTPException(status_code=404, detail="المكالمة غير موجودة أو منتهية")
-    return {"id": call_id, "status": "ended"}
+def end_call(call_id: int, phone: str = Depends(current_user), db=Depends(get_db)):
+    call = db.get(Call, call_id)
+    if not call or phone not in (call.owner_phone, call.contact_phone): raise HTTPException(status_code=404, detail="المكالمة غير موجودة")
+    call.status, call.ended_at = "ended", now_iso(); db.commit()
+    return {"id": call.id, "status": call.status}
+
+
+class SignalRooms:
+    def __init__(self): self.rooms: dict[int, dict[str, WebSocket]] = {}
+    async def join(self, call_id: int, phone: str, ws: WebSocket):
+        await ws.accept(); peers = self.rooms.setdefault(call_id, {}); peers[phone] = ws
+        for other_phone, other in list(peers.items()):
+            if other_phone != phone:
+                await other.send_json({"type": "peer_joined", "phone": phone})
+        await ws.send_json({"type": "ready", "phone": phone})
+    def leave(self, call_id: int, phone: str):
+        peers = self.rooms.get(call_id, {}); peers.pop(phone, None)
+        if not peers: self.rooms.pop(call_id, None)
+    async def relay(self, call_id: int, sender: str, payload: dict):
+        for peer, ws in list(self.rooms.get(call_id, {}).items()):
+            if peer != sender:
+                await ws.send_json({**payload, "from": sender})
+
+signal_rooms = SignalRooms()
+
+@app.websocket("/ws/calls/{call_id}")
+async def call_signaling(websocket: WebSocket, call_id: int, token: str = ""):
+    db = SessionLocal()
+    user = user_from_token(token, db) if token else None
+    call = db.get(Call, call_id) if user else None
+    if not user or not call or user.phone not in (call.owner_phone, call.contact_phone):
+        db.close(); await websocket.close(code=1008); return
+    phone = user.phone; db.close()
+    await signal_rooms.join(call_id, phone, websocket)
+    try:
+        while True:
+            payload = await websocket.receive_json()
+            if payload.get("type") not in {"offer", "answer", "ice", "hangup"}: continue
+            await signal_rooms.relay(call_id, phone, payload)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        signal_rooms.leave(call_id, phone)
+        try: await signal_rooms.relay(call_id, phone, {"type": "peer_left"})
+        except Exception: pass

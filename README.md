@@ -1,6 +1,6 @@
 # Mirsal Messenger
 
-Arabic RTL messaging-app prototype with SQLite persistence, phone registration through Twilio Verify, searchable conversations, live-broadcast preview, and a call-control UI.
+Arabic RTL messaging prototype with profiles, PostgreSQL/SQLite persistence, Twilio Verify phone login, and WebRTC peer-call signaling.
 
 ## Run locally
 
@@ -11,23 +11,18 @@ pip install -r requirements.txt
 uvicorn src.app:app --reload
 ```
 
-Open http://localhost:8000. SQLite data is stored in `mirsal.db` (override with `MIRSAL_DB_PATH`). The database is created automatically.
+Open http://localhost:8000. Without `DATABASE_URL`, local development uses `mirsal.db` SQLite. Set `DATABASE_URL` to a PostgreSQL connection string to use PostgreSQL. `postgres://` and `postgresql://` URLs are normalized to psycopg 3.
 
-## Enable real phone verification
+## Phone verification
 
-Create a Twilio Verify service and set these environment variables on the server (never put credentials in browser code or commit them):
+Configure a Twilio Verify service and set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_VERIFY_SERVICE_SID` in the server environment. Credentials must not be added to frontend code or committed. Without these values, registration correctly fails closed rather than returning a fake OTP.
 
-```bash
-export TWILIO_ACCOUNT_SID="AC..."
-export TWILIO_AUTH_TOKEN="..."
-export TWILIO_VERIFY_SERVICE_SID="VA..."
-```
+## WebRTC calls
 
-On Windows PowerShell use `$env:TWILIO_ACCOUNT_SID="..."` and equivalent commands. Without these values, registration returns HTTP 503; no fake OTP is issued. Configure the provider's allowed destinations and billing as required.
+The API provides authenticated WebSocket signaling at `/ws/calls/{call_id}`. Browsers exchange SDP offers/answers and ICE candidates through the app; media flows peer-to-peer. Configure `TURN_URLS`, `TURN_USERNAME`, and `TURN_CREDENTIAL` for a production TURN provider to connect peers behind restrictive NAT/firewalls. STUN-only calls are best-effort and are not reliably connectable on all networks. Use HTTPS/WSS (Render supplies HTTPS). Live broadcast to many viewers still needs an SFU/media server; this WebRTC signaling implements one-to-one calls.
 
-## Current scope and security notes
+## Deploy to Render
 
-- Users, sessions, conversations, messages, live-session metadata, and call records persist in SQLite. API endpoints require a bearer session token after SMS verification.
-- Calls currently provide local microphone/camera preview, mute, screen-share, and end-call controls. They do **not** connect another participant; real two-way calls and public live video require WebRTC signaling plus an SFU/media server. Use HTTPS for browser camera/microphone/screen permissions outside localhost.
-- Live broadcast metadata is persisted; the preview is local and is not distributed to viewers.
-- For production deployment, use HTTPS, rate-limit verification endpoints, add retention/privacy controls and backups, and consider PostgreSQL and a managed secrets store.
+`render.yaml` defines the FastAPI web service and managed PostgreSQL database. In Render, choose **New → Blueprint**, select this repository and the `feature/mirsal-messaging-app` branch, then apply the blueprint. Fill in the Twilio and TURN environment variables in the service dashboard. Keep secrets in Render's environment settings. The deployment was not launched from this repository because it requires access to your Render account and provider credentials.
+
+The database schema is created automatically at startup; for a production app, introduce Alembic migrations before evolving schema further. Configure backups, rate limits and data-retention/privacy policies before handling real user data.
