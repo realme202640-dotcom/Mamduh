@@ -1,50 +1,52 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ar" dir="rtl">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Mergington High School Activities</title>
-    <link rel="stylesheet" href="styles.css" />
+    <title>Mirsal Messenger</title>
+    <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <header>
-      <h1>Mergington High School</h1>
-      <h2>Extracurricular Activities</h2>
-    </header>
-
-    <main>
-      <section id="activities-container">
-        <h3>Available Activities</h3>
-        <div id="activities-list">
-          <!-- Activities will be loaded here -->
-          <p>Loading activities...</p>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div class="profile-wrap"><div class="avatar">م</div><div><h3>مرسال</h3><span id="profile-phone">غير مسجل</span></div></div>
+          <div class="actions"><button class="icon-btn" id="new-chat" title="محادثة جديدة">＋</button><button class="icon-btn" id="logout" title="تسجيل الخروج">↪</button></div>
         </div>
-      </section>
-
-      <section id="signup-container">
-        <h3>Sign Up for an Activity</h3>
-        <form id="signup-form">
-          <div class="form-group">
-            <label for="email">Student Email:</label>
-            <input type="email" id="email" required placeholder="your-email@mergington.edu" />
+        <div class="search-box"><input id="chat-search" type="search" placeholder="ابحث في المحادثات أو ابدأ محادثة جديدة" /></div>
+        <div class="chat-list" id="chat-list"></div>
+      </aside>
+      <main class="main-panel">
+        <section class="auth-view" id="auth-view">
+          <div class="auth-card">
+            <div class="brand"><div class="brand-icon">M</div><h1>مرسال</h1></div>
+            <h2>تسجيل رقم الهاتف</h2><p>سنرسل رمز تحقق برسالة نصية إلى هاتفك.</p>
+            <div class="field-row"><select id="country-code" aria-label="مفتاح الدولة"><option value="+966">السعودية +966</option><option value="+971">الإمارات +971</option><option value="+965">الكويت +965</option><option value="+20">مصر +20</option><option value="+1">أمريكا +1</option></select><input id="phone-input" type="tel" autocomplete="tel-national" placeholder="رقم الهاتف" /></div>
+            <button id="register-btn" class="primary-btn">إرسال رمز التحقق</button>
+            <div class="otp-box hidden" id="otp-box"><label for="otp-input">رمز التحقق</label><input id="otp-input" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="أدخل الرمز الذي وصلك" /><button id="verify-btn" class="secondary-btn">تأكيد وتسجيل الدخول</button></div>
+            <div id="auth-message" class="message hidden" role="status"></div>
+            <p class="fine-print">يتطلب إرسال الرسائل إعداد مزود SMS مثل Twilio Verify على الخادم.</p>
           </div>
-          <div class="form-group">
-            <label for="activity">Select Activity:</label>
-            <select id="activity" required>
-              <option value="">-- Select an activity --</option>
-              <!-- Activity options will be loaded here -->
-            </select>
-          </div>
-          <button type="submit">Sign Up</button>
-        </form>
-        <div id="message" class="hidden"></div>
-      </section>
-    </main>
-
-    <footer>
-      <p>&copy; 2023 Mergington High School</p>
-    </footer>
-
-    <script src="app.js"></script>
+        </section>
+        <section class="content-view hidden" id="chat-view">
+          <div class="chat-header"><div class="chat-user"><div class="avatar small" id="chat-avatar">م</div><div><h3 id="chat-title">اختر محادثة</h3><span id="chat-status">رسائل محفوظة في قاعدة البيانات</span></div></div><div class="chat-tools"><button class="icon-btn" id="audio-call" title="مكالمة صوتية">📞</button><button class="icon-btn" id="video-call" title="مكالمة فيديو">📹</button></div></div>
+          <div class="messages" id="messages"><div class="empty-state">اختر محادثة أو ابدأ محادثة جديدة</div></div>
+          <form id="message-form" class="composer"><input id="message-input" maxlength="4000" placeholder="اكتب رسالة..." autocomplete="off" /><button type="submit" class="primary-btn small">إرسال</button></form>
+        </section>
+        <section class="content-view hidden" id="broadcast-view">
+          <div class="panel-header"><h2>البث المباشر</h2><button id="start-live" class="primary-btn small">ابدأ البث</button></div>
+          <div class="live-stream-card"><div class="live-video"><video id="live-preview" autoplay muted playsinline></video><div class="live-pulse"></div><div class="live-overlay"><span id="live-badge">جاهز</span><strong id="live-title">ابدأ بثاً جديداً</strong></div></div><div class="live-meta"><div><label>المشاهدون</label><strong id="viewers-count">0</strong></div><div><label>الحالة</label><strong id="host-name">غير مباشر</strong></div></div></div>
+          <div class="stream-list" id="stream-list"></div>
+        </section>
+        <section class="content-view hidden" id="calls-view">
+          <div class="panel-header"><h2>المكالمات</h2><button id="new-call" class="primary-btn small">اتصال جديد</button></div>
+          <div class="call-stage hidden" id="call-stage"><video id="call-preview" autoplay muted playsinline></video><div class="call-overlay"><div class="call-contact" id="call-contact">اتصال</div><div id="call-state">جارٍ الاتصال</div><div class="call-controls"><button id="mute-call" class="call-control">🎙️<span>كتم</span></button><button id="share-screen" class="call-control">🖥️<span>مشاركة الشاشة</span></button><button id="end-call" class="call-control end">📴<span>إنهاء</span></button></div></div></div>
+          <div class="calls-list" id="calls-list"></div>
+        </section>
+      </main>
+    </div>
+    <nav class="bottom-nav"><button class="nav-btn active" data-view="chat-view" aria-label="المحادثات">💬</button><button class="nav-btn" data-view="broadcast-view" aria-label="البث">📹</button><button class="nav-btn" data-view="calls-view" aria-label="المكالمات">📞</button></nav>
+    <div class="toast hidden" id="toast" role="status"></div>
+    <script src="/static/app.js"></script>
   </body>
 </html>

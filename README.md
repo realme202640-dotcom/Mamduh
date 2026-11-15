@@ -1,16 +1,33 @@
-# Getting Started with GitHub Copilot
+# Mirsal Messenger
 
-<img src="https://octodex.github.com/images/Professortocat_v2.png" align="right" height="200px" />
+Arabic RTL messaging-app prototype with SQLite persistence, phone registration through Twilio Verify, searchable conversations, live-broadcast preview, and a call-control UI.
 
-Hey realme202640-dotcom!
+## Run locally
 
-Mona here. I'm done preparing your exercise. Hope you enjoy! 💚
+```bash
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
+pip install -r requirements.txt
+uvicorn src.app:app --reload
+```
 
-Remember, it's self-paced so feel free to take a break! ☕️
+Open http://localhost:8000. SQLite data is stored in `mirsal.db` (override with `MIRSAL_DB_PATH`). The database is created automatically.
 
-[![](https://img.shields.io/badge/Go%20to%20Exercise-%E2%86%92-1f883d?style=for-the-badge&logo=github&labelColor=197935)](https://github.com/realme202640-dotcom/Mamduh/issues/1)
+## Enable real phone verification
 
----
+Create a Twilio Verify service and set these environment variables on the server (never put credentials in browser code or commit them):
 
-&copy; 2025 GitHub &bull; [Code of Conduct](https://www.contributor-covenant.org/version/2/1/code_of_conduct/code_of_conduct.md) &bull; [MIT License](https://gh.io/mit)
+```bash
+export TWILIO_ACCOUNT_SID="AC..."
+export TWILIO_AUTH_TOKEN="..."
+export TWILIO_VERIFY_SERVICE_SID="VA..."
+```
 
+On Windows PowerShell use `$env:TWILIO_ACCOUNT_SID="..."` and equivalent commands. Without these values, registration returns HTTP 503; no fake OTP is issued. Configure the provider's allowed destinations and billing as required.
+
+## Current scope and security notes
+
+- Users, sessions, conversations, messages, live-session metadata, and call records persist in SQLite. API endpoints require a bearer session token after SMS verification.
+- Calls currently provide local microphone/camera preview, mute, screen-share, and end-call controls. They do **not** connect another participant; real two-way calls and public live video require WebRTC signaling plus an SFU/media server. Use HTTPS for browser camera/microphone/screen permissions outside localhost.
+- Live broadcast metadata is persisted; the preview is local and is not distributed to viewers.
+- For production deployment, use HTTPS, rate-limit verification endpoints, add retention/privacy controls and backups, and consider PostgreSQL and a managed secrets store.
